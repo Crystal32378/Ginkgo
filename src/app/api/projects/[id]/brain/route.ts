@@ -5,26 +5,27 @@ import { formatBrainProtocol, type KnowledgeItem, type KnowledgeType } from '@/l
 export const dynamic = 'force-dynamic'
 
 /**
- * GET /api/projects/[id]/memory  (backward compat — 之前的端點)
- *
- * v2 架構下等同於 /brain。為了不破壞既有 Chrome 擴充，保留這個端點。
- *
- *   - ?format=text     → Brain Protocol 純文本
- *   - ?format=markdown → Brain Protocol 純文本（相同）
- *   - 預設 JSON        → { project, brainVersion, memory: {items} }
+ * GET /api/projects/[id]/brain
+ *   - 預設回傳 Brain 的所有 active KnowledgeItem（JSON）
+ *   - ?format=protocol → 回傳 Brain Protocol 純文本（給 agent 貼到 system prompt）
+ *   - ?include=retired → 也包含已退役的 items
  */
 export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   try {
     const { id: projectId } = await ctx.params
     const format = req.nextUrl.searchParams.get('format') || 'json'
+    const includeRetired = req.nextUrl.searchParams.get('include') === 'retired'
 
     const project = await db.project.findUnique({ where: { id: projectId } })
     if (!project) {
       return NextResponse.json({ error: 'Project not found' }, { status: 404 })
     }
 
+    const where: any = { projectId }
+    if (!includeRetired) where.status = 'active'
+
     const items = await db.knowledgeItem.findMany({
-      where: { projectId, status: 'active' },
+      where,
       orderBy: [{ type: 'asc' }, { itemId: 'asc' }],
     })
 
@@ -36,14 +37,14 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
       content: i.content,
       rationale: i.rationale,
       confidence: i.confidence,
-      status: 'active',
+      status: i.status as 'active' | 'retired',
       sourcePillId: i.sourcePillId,
       supersededById: i.supersededById,
       createdAt: i.createdAt.toISOString(),
       updatedAt: i.updatedAt.toISOString(),
     }))
 
-    if (format === 'text' || format === 'markdown' || format === 'protocol') {
+    if (format === 'protocol') {
       const text = formatBrainProtocol(project.name, project.brainVersion, brainItems)
       return new NextResponse(text, {
         headers: { 'content-type': 'text/plain; charset=utf-8' },
@@ -51,14 +52,17 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
     }
 
     return NextResponse.json({
-      project: { id: project.id, name: project.name, emoji: project.emoji },
+      project: {
+        id: project.id,
+        name: project.name,
+        emoji: project.emoji,
+      },
       brainVersion: project.brainVersion,
-      memory: { items: brainItems },
-      activeCount: brainItems.length,
-      note: 'v2 architecture — use /api/projects/[id]/brain for the canonical endpoint',
+      items: brainItems,
+      activeCount: brainItems.filter((i) => i.status === 'active').length,
     })
   } catch (error) {
-    console.error('[GET /api/projects/[id]/memory]', error)
-    return NextResponse.json({ error: 'Failed to fetch memory' }, { status: 500 })
+    console.error('[GET /api/projects/[id]/brain]', error)
+    return NextResponse.json({ error: 'Failed to fetch brain' }, { status: 500 })
   }
 }

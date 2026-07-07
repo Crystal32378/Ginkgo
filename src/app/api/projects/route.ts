@@ -9,7 +9,7 @@ export async function GET() {
     const projects = await db.project.findMany({
       orderBy: { updatedAt: 'desc' },
       include: {
-        _count: { select: { pills: true } },
+        _count: { select: { pills: true, knowledgeItems: true } },
       },
     })
     return NextResponse.json({ projects })

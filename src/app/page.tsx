@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
 import { Input } from '@/components/ui/input'
@@ -34,15 +34,22 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { useToast } from '@/hooks/use-toast'
 import { Toaster } from '@/components/ui/toaster'
 import { GinkgoLeaf, GinkgoSpinning, GinkgoRain } from '@/components/ginkgo-leaf'
-import { type MemorySummary, type ActionItem, formatMemoryCard } from '@/lib/memory'
+import {
+  type KnowledgeItem,
+  type KnowledgeType,
+  type DeltaOperation,
+  type DistillationRitualStep,
+  KNOWLEDGE_TYPES,
+  TYPE_EMOJI,
+  TYPE_LABEL_ZH,
+  formatBrainProtocol,
+} from '@/lib/brain'
 import {
   Plus,
   ArrowLeft,
-  Sparkles,
   Copy,
   Trash2,
   History,
-  RotateCcw,
   Code2,
   FlaskConical,
   Leaf,
@@ -50,6 +57,12 @@ import {
   Link as LinkIcon,
   Download,
   ExternalLink,
+  Terminal,
+  Sparkles,
+  CheckCircle2,
+  Database,
+  ChevronDown,
+  ChevronRight,
 } from 'lucide-react'
 
 // ==================== Types ====================
@@ -58,22 +71,45 @@ interface Project {
   name: string
   description: string | null
   emoji: string
+  brainVersion: number
   createdAt: string
   updatedAt: string
-  _count?: { pills: number }
+  _count?: { pills: number; knowledgeItems: number }
 }
 
 interface PillMeta {
   id: string
   title: string | null
-  isCurrent: boolean
-  previousPillId: string | null
+  tokenEstimate: number
+  createdAt: string
+  knowledgeItemCount: number
+  distillationCount: number
+}
+
+interface DiaryEntry {
+  id: string
+  pillId: string
+  pillTitle: string | null
+  brainVersionBefore: number
+  brainVersionAfter: number
+  ritualSteps: DistillationRitualStep[]
+  deltaSummary: { added?: number; updated?: number; retired?: number; byType?: Record<string, number> }
+  tokensRead: number
+  tokensSavedEstimate: number
   createdAt: string
 }
 
-interface PillFull extends PillMeta {
-  summary: MemorySummary
-  conversationText: string
+interface DistillResponse {
+  pillId: string
+  title: string
+  brainVersionBefore: number
+  brainVersionAfter: number
+  ritual: DistillationRitualStep[]
+  delta: DeltaOperation['delta']
+  todayGinkgo: Record<string, number>
+  tokensRead: number
+  tokensSavedEstimate: number
+  backend: string
 }
 
 // ==================== Main Page ====================
@@ -84,7 +120,7 @@ export default function Home() {
   return (
     <div className="min-h-screen flex flex-col bg-gradient-to-br from-amber-50 via-stone-50 to-emerald-50">
       <Header />
-      <main className="flex-1 container mx-auto max-w-6xl px-4 py-6 md:py-10">
+      <main className="flex-1 container mx-auto max-w-7xl px-4 py-6 md:py-10">
         {view === 'list' ? (
           <ProjectListView
             onOpen={(p) => {
@@ -112,22 +148,22 @@ export default function Home() {
 function Header() {
   return (
     <header className="border-b border-amber-200/60 bg-amber-50/40 backdrop-blur-sm sticky top-0 z-10">
-      <div className="container mx-auto max-w-6xl px-4 py-3 flex items-center gap-3">
+      <div className="container mx-auto max-w-7xl px-4 py-3 flex items-center gap-3">
         <div className="flex items-center gap-2 text-amber-700">
           <GinkgoLeaf size={28} className="text-amber-600" />
           <div>
             <h1 className="text-lg font-bold tracking-tight text-stone-800">銀杏藥局</h1>
-            <p className="text-[10px] text-stone-500 -mt-0.5">Ginkgo Pharmacy · 治療 AI 失憶症</p>
+            <p className="text-[10px] text-stone-500 -mt-0.5">Ginkgo Distillation Engine · 治療 AI 失憶症</p>
           </div>
         </div>
         <div className="ml-auto hidden sm:flex items-center gap-1.5 text-xs text-stone-500">
           <Badge variant="outline" className="bg-amber-100/60 border-amber-200 text-amber-800">
             <Leaf className="w-3 h-3 mr-1" />
-            4 段式記憶
+            8-type Brain
           </Badge>
           <Badge variant="outline" className="bg-emerald-100/60 border-emerald-200 text-emerald-800">
             <History className="w-3 h-3 mr-1" />
-            滾動 + 回滾
+            Delta + Diary
           </Badge>
         </div>
       </div>
@@ -138,12 +174,12 @@ function Header() {
 function Footer() {
   return (
     <footer className="mt-auto border-t border-amber-200/60 bg-amber-50/30">
-      <div className="container mx-auto max-w-6xl px-4 py-4 text-xs text-stone-500 flex flex-wrap items-center justify-between gap-2">
+      <div className="container mx-auto max-w-7xl px-4 py-4 text-xs text-stone-500 flex flex-wrap items-center justify-between gap-2">
         <span className="flex items-center gap-1.5">
           <GinkgoLeaf size={12} className="text-amber-600" />
-          一鍵保存對話，後台偷偷幫你煉成記憶藥丸
+          蒸餾引擎 — 把對話變成可演化的專案知識
         </span>
-        <span className="text-stone-400">local-first · SQLite · 不上雲</span>
+        <span className="text-stone-400 font-mono">v2 · local-first · SQLite</span>
       </div>
     </footer>
   )
@@ -189,7 +225,7 @@ function ProjectListView({ onOpen }: { onOpen: (p: Project) => void }) {
       if (!res.ok) throw new Error('create failed')
       await fetchProjects()
       setNewProject({ name: '', description: '', emoji: '🌿' })
-      toast({ title: '專案已建立', description: '可以開始煉丹了' })
+      toast({ title: '專案已建立', description: '可以開始蒸餾了' })
     } catch (err) {
       toast({ title: '建立失敗', description: String(err), variant: 'destructive' })
     } finally {
@@ -209,27 +245,30 @@ function ProjectListView({ onOpen }: { onOpen: (p: Project) => void }) {
 
   return (
     <div className="space-y-6">
-      {/* Hero 區 */}
+      {/* Hero */}
       <Card className="border-amber-200 bg-gradient-to-br from-amber-50 to-emerald-50/50 relative overflow-hidden">
         <GinkgoRain count={6} />
         <CardContent className="pt-8 pb-8 relative z-10">
           <div className="flex items-start gap-4 flex-wrap">
             <div className="flex-1 min-w-[280px]">
               <h2 className="text-2xl md:text-3xl font-bold text-stone-800 mb-2 flex items-center gap-2 flex-wrap">
-                治療 AI 失憶症
+                Distillation Engine
                 <span className="text-amber-600">
                   <GinkgoLeaf size={28} className="inline" />
                 </span>
               </h2>
               <p className="text-stone-600 text-sm leading-relaxed">
-                把冗長的對話變成一顆結構化的記憶藥丸。下次開新對話前服用一顆，
-                AI 就不會重新提問已經討論過的事、不會推翻已定案的決策、不會提議已被否決的方向。
+                不是摘要引擎，是<span className="font-semibold text-amber-700">蒸餾引擎</span>。
+                把對話持續提煉成可演化的 Project Brain — 8 種知識類型、delta 運算、可檢視的推理過程。
+                下次對話直接讀 Brain，不再重新解釋背景。
               </p>
-              <div className="mt-4 grid grid-cols-2 md:grid-cols-4 gap-2 text-xs">
-                <FeaturePill icon="✅" label="決策" />
-                <FeaturePill icon="⚠️" label="開放問題" />
-                <FeaturePill icon="📋" label="行動項" />
-                <FeaturePill icon="🎯" label="背景錨點" />
+              <div className="mt-4 grid grid-cols-4 md:grid-cols-8 gap-1.5 text-xs">
+                {KNOWLEDGE_TYPES.map((t) => (
+                  <div key={t} className="flex flex-col items-center bg-white/70 border border-amber-200/60 rounded-md px-1 py-1.5">
+                    <span className="text-base">{TYPE_EMOJI[t]}</span>
+                    <span className="font-medium text-stone-700 text-[10px] mt-0.5">{TYPE_LABEL_ZH[t]}</span>
+                  </div>
+                ))}
               </div>
             </div>
             <Dialog>
@@ -246,7 +285,7 @@ function ProjectListView({ onOpen }: { onOpen: (p: Project) => void }) {
                     新增記憶專案
                   </DialogTitle>
                   <DialogDescription>
-                    不同專案的記憶互相隔離 — 換專案就換一整組記憶，避免汙染。
+                    不同專案的 Brain 互相隔離 — 換專案就換一整組知識，避免汙染。
                   </DialogDescription>
                 </DialogHeader>
                 <div className="space-y-3 py-2">
@@ -317,15 +356,6 @@ function ProjectListView({ onOpen }: { onOpen: (p: Project) => void }) {
   )
 }
 
-function FeaturePill({ icon, label }: { icon: string; label: string }) {
-  return (
-    <div className="flex items-center gap-1.5 bg-white/70 border border-amber-200/60 rounded-full px-3 py-1.5 text-stone-700">
-      <span>{icon}</span>
-      <span className="font-medium">{label}</span>
-    </div>
-  )
-}
-
 function EmptyProjects() {
   return (
     <Card className="border-dashed border-amber-200 bg-amber-50/30 relative overflow-hidden">
@@ -335,7 +365,7 @@ function EmptyProjects() {
           <GinkgoLeaf size={48} />
         </div>
         <p className="text-stone-600 mb-1">還沒有專案</p>
-        <p className="text-xs text-stone-400">按上面的「新增專案」開始你的第一顆藥丸</p>
+        <p className="text-xs text-stone-400">按上面的「新增專案」開始你的第一顆 Brain</p>
       </CardContent>
     </Card>
   )
@@ -350,7 +380,7 @@ function ProjectCard({ project, onOpen, onDelete }: { project: Project; onOpen: 
           <div className="flex-1 min-w-0">
             <CardTitle className="text-base text-stone-800 truncate">{project.name}</CardTitle>
             <CardDescription className="text-xs text-stone-500 mt-0.5">
-              {new Date(project.updatedAt).toLocaleDateString('zh-TW')}
+              Brain v{(project.brainVersion ?? 0).toFixed(2)} · {new Date(project.updatedAt).toLocaleDateString('zh-TW')}
             </CardDescription>
           </div>
           <AlertDialog>
@@ -366,7 +396,7 @@ function ProjectCard({ project, onOpen, onDelete }: { project: Project; onOpen: 
               <AlertDialogHeader>
                 <AlertDialogTitle>刪除這個專案？</AlertDialogTitle>
                 <AlertDialogDescription>
-                  這會連同所有藥丸一併刪除，無法復原。
+                  這會連同所有 Brain 知識、對話 log、蒸餾日記一併刪除，無法復原。
                 </AlertDialogDescription>
               </AlertDialogHeader>
               <AlertDialogFooter>
@@ -383,16 +413,20 @@ function ProjectCard({ project, onOpen, onDelete }: { project: Project; onOpen: 
         <p className="text-xs text-stone-500 line-clamp-2 min-h-[2rem]">
           {project.description || '（沒有簡介）'}
         </p>
-        <div className="mt-3 flex items-center gap-2">
+        <div className="mt-3 flex items-center gap-2 flex-wrap">
           <Badge variant="secondary" className="bg-amber-100 text-amber-800 text-xs">
+            <Database className="w-3 h-3 mr-1" />
+            {project._count?.knowledgeItems ?? 0} 知識
+          </Badge>
+          <Badge variant="secondary" className="bg-stone-100 text-stone-700 text-xs">
             <FlaskConical className="w-3 h-3 mr-1" />
-            {project._count?.pills ?? 0} 顆藥丸
+            {project._count?.pills ?? 0} 對話
           </Badge>
         </div>
       </CardContent>
       <CardFooter className="pt-0">
         <Button onClick={onOpen} variant="outline" className="w-full border-amber-200 text-amber-700 hover:bg-amber-50">
-          打開藥櫃
+          打開 Brain
         </Button>
       </CardFooter>
     </Card>
@@ -402,94 +436,82 @@ function ProjectCard({ project, onOpen, onDelete }: { project: Project; onOpen: 
 // ==================== Project Detail View ====================
 function ProjectDetailView({ project, onBack }: { project: Project | null; onBack: () => void }) {
   const { toast } = useToast()
-  const [pills, setPills] = useState<PillFull[]>([])
-  const [pillsMeta, setPillsMeta] = useState<PillMeta[]>([])
+  const [brainItems, setBrainItems] = useState<KnowledgeItem[]>([])
+  const [brainVersion, setBrainVersion] = useState(0)
+  const [diary, setDiary] = useState<DiaryEntry[]>([])
   const [loading, setLoading] = useState(true)
   const [conversation, setConversation] = useState('')
-  const [refining, setRefining] = useState(false)
+  const [distilling, setDistilling] = useState(false)
+  const [ritualSteps, setRitualSteps] = useState<DistillationRitualStep[] | null>(null)
+  const [lastDistill, setLastDistill] = useState<DistillResponse | null>(null)
   const [showApiHelp, setShowApiHelp] = useState(false)
 
-  const fetchPills = useCallback(async () => {
+  const fetchAll = useCallback(async () => {
     if (!project) return
     setLoading(true)
     try {
-      const res = await fetch(`/api/projects/${project.id}/pills`)
-      const data = await res.json()
-      setPills(data.pills ?? [])
-      setPillsMeta(
-        (data.pills ?? []).map((p: PillFull) => ({
-          id: p.id,
-          title: p.title,
-          isCurrent: p.isCurrent,
-          previousPillId: p.previousPillId,
-          createdAt: p.createdAt,
-        })),
-      )
+      const [brainRes, diaryRes] = await Promise.all([
+        fetch(`/api/projects/${project.id}/brain`),
+        fetch(`/api/projects/${project.id}/diary`),
+      ])
+      const brainData = await brainRes.json()
+      const diaryData = await diaryRes.json()
+      setBrainItems(brainData.items ?? [])
+      setBrainVersion(brainData.brainVersion ?? 0)
+      setDiary(diaryData.logs ?? [])
     } catch (err) {
-      toast({ title: '載入藥丸失敗', description: String(err), variant: 'destructive' })
+      toast({ title: '載入失敗', description: String(err), variant: 'destructive' })
     } finally {
       setLoading(false)
     }
   }, [project, toast])
 
   useEffect(() => {
-    fetchPills()
-  }, [fetchPills])
+    fetchAll()
+  }, [fetchAll])
 
-  const handleRefine = async () => {
+  const handleDistill = async () => {
     if (!project) return
     if (!conversation.trim()) {
       toast({ title: '請貼上對話內容', variant: 'destructive' })
       return
     }
-    setRefining(true)
+    setDistilling(true)
+    setRitualSteps([])
+    setLastDistill(null)
     try {
-      const res = await fetch(`/api/projects/${project.id}/pills`, {
+      const res = await fetch(`/api/projects/${project.id}/distill`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ conversationText: conversation }),
       })
       if (!res.ok) {
         const err = await res.json().catch(() => ({}))
-        throw new Error(err.error || 'refine failed')
+        throw new Error(err.error || 'distill failed')
       }
-      const data = await res.json()
-      toast({
-        title: '煉丹完成 🌿',
-        description: `新藥丸：${data.pill?.title ?? ''}`,
-      })
+      const data: DistillResponse = await res.json()
+
+      // 逐條顯示 ritual 步驟（動畫感）
+      for (let i = 0; i < data.ritual.length; i++) {
+        await new Promise((r) => setTimeout(r, 280))
+        setRitualSteps(data.ritual.slice(0, i + 1))
+      }
+      setRitualSteps(data.ritual)
+      setLastDistill(data)
+      setBrainVersion(data.brainVersionAfter)
       setConversation('')
-      await fetchPills()
-    } catch (err) {
-      toast({ title: '煉丹失敗', description: String(err), variant: 'destructive' })
-    } finally {
-      setRefining(false)
-    }
-  }
 
-  const handleRollback = async (pillId: string) => {
-    if (!project) return
-    try {
-      await fetch(`/api/projects/${project.id}/rollback`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ pillId }),
+      toast({
+        title: `蒸餾完成 · Brain v${data.brainVersionAfter.toFixed(2)}`,
+        description: `+${data.delta.add.length} / ~${data.delta.update.length} / -${data.delta.retire.length}`,
       })
-      await fetchPills()
-      toast({ title: '已回滾到此藥丸' })
-    } catch (err) {
-      toast({ title: '回滾失敗', description: String(err), variant: 'destructive' })
-    }
-  }
 
-  const handleDeletePill = async (pillId: string) => {
-    if (!project) return
-    try {
-      await fetch(`/api/projects/${project.id}/pills/${pillId}`, { method: 'DELETE' })
-      await fetchPills()
-      toast({ title: '藥丸已丟棄' })
+      // 重新撈 Brain + Diary
+      await fetchAll()
     } catch (err) {
-      toast({ title: '刪除失敗', description: String(err), variant: 'destructive' })
+      toast({ title: '蒸餾失敗', description: String(err), variant: 'destructive' })
+    } finally {
+      setDistilling(false)
     }
   }
 
@@ -504,8 +526,6 @@ function ProjectDetailView({ project, onBack }: { project: Project | null; onBac
     )
   }
 
-  const currentPill = pills.find((p) => p.isCurrent)
-
   return (
     <div className="space-y-6">
       {/* Top bar */}
@@ -519,16 +539,17 @@ function ProjectDetailView({ project, onBack }: { project: Project | null; onBac
           <span className="text-2xl">{project.emoji}</span>
           <div className="min-w-0">
             <h2 className="text-lg font-bold text-stone-800 truncate">{project.name}</h2>
-            {project.description && (
-              <p className="text-xs text-stone-500 truncate">{project.description}</p>
-            )}
+            {project.description && <p className="text-xs text-stone-500 truncate">{project.description}</p>}
           </div>
+          <Badge variant="outline" className="ml-2 font-mono text-xs bg-stone-100">
+            Brain v{brainVersion.toFixed(2)}
+          </Badge>
         </div>
         <Dialog open={showApiHelp} onOpenChange={setShowApiHelp}>
           <DialogTrigger asChild>
             <Button variant="outline" size="sm" className="border-emerald-200 text-emerald-700 hover:bg-emerald-50">
               <Code2 className="w-3.5 h-3.5 mr-1" />
-              <span className="hidden sm:inline">給 agent 用的 API</span>
+              <span className="hidden sm:inline">Agent API</span>
               <span className="sm:hidden">API</span>
             </Button>
           </DialogTrigger>
@@ -538,92 +559,95 @@ function ProjectDetailView({ project, onBack }: { project: Project | null; onBac
                 <Code2 className="w-4 h-4 text-emerald-600" />
                 Agent API 端點
               </DialogTitle>
-              <DialogDescription>
-                讓你的 agent 程式透過這個端點撈現在的滾動記憶，注入到下次對話的 system prompt 開頭。
-              </DialogDescription>
+              <DialogDescription>讓你的 agent 撈 Brain Protocol 注入到下次對話的 system prompt。</DialogDescription>
             </DialogHeader>
             <ApiHelpContent projectId={project.id} />
           </DialogContent>
         </Dialog>
       </div>
 
-      {/* 煉丹介面 */}
-      <RefineCard
-        conversation={conversation}
-        setConversation={setConversation}
-        onRefine={handleRefine}
-        refining={refining}
-        hasPrevious={!!currentPill}
-      />
+      {/* 主區塊：左邊是輸入+今日銀杏，右邊是 Brain Protocol（深色） */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        {/* === 左邊（人類側 — 暖色） === */}
+        <div className="space-y-4">
+          <DistillCard
+            conversation={conversation}
+            setConversation={setConversation}
+            onDistill={handleDistill}
+            distilling={distilling}
+            ritualSteps={ritualSteps}
+          />
 
-      {/* 當前記憶卡 */}
-      {loading ? (
-        <Skeleton className="h-64 rounded-2xl" />
-      ) : currentPill ? (
-        <CurrentMemoryCard project={project} pill={currentPill} />
-      ) : (
-        <NoMemoryCard />
-      )}
+          {lastDistill && !distilling && <TodayGinkgoCard distill={lastDistill} />}
 
-      {/* 歷史 timeline */}
-      {pills.length > 0 && (
-        <HistoryTimeline
-          pills={pills}
-          onRollback={handleRollback}
-          onDelete={handleDeletePill}
-        />
-      )}
+          {/* Brain items 列表（暖色版） */}
+          {!loading && brainItems.filter((i) => i.status === 'active').length > 0 && (
+            <BrainItemsCard items={brainItems} />
+          )}
+        </div>
+
+        {/* === 右邊（Agent 側 — 深色科技） === */}
+        <div className="space-y-4">
+          <BrainProtocolPanel
+            projectName={project.name}
+            brainVersion={brainVersion}
+            items={brainItems}
+            loading={loading}
+          />
+        </div>
+      </div>
+
+      {/* === 下方：Distillation Diary === */}
+      <DistillationDiaryPanel diary={diary} />
     </div>
   )
 }
 
 function ApiHelpContent({ projectId }: { projectId: string }) {
   const baseUrl = typeof window !== 'undefined' ? window.location.origin : 'https://your-app.example'
-  const jsonUrl = `${baseUrl}/api/projects/${projectId}/memory`
-  const textUrl = `${baseUrl}/api/projects/${projectId}/memory?format=text`
+  const jsonUrl = `${baseUrl}/api/projects/${projectId}/brain`
+  const protoUrl = `${baseUrl}/api/projects/${projectId}/brain?format=protocol`
 
   return (
     <div className="space-y-3 py-2">
       <div className="space-y-1.5">
         <Label className="text-xs text-stone-500">JSON 格式（給程式 parse）</Label>
-        <pre className="text-[11px] bg-stone-900 text-stone-100 rounded-lg p-3 overflow-x-auto">
-          {`curl ${jsonUrl}`}
-        </pre>
+        <pre className="text-[11px] bg-stone-900 text-emerald-300 rounded-lg p-3 overflow-x-auto font-mono">{`curl ${jsonUrl}`}</pre>
       </div>
       <div className="space-y-1.5">
-        <Label className="text-xs text-stone-500">純文本格式（直接貼到 system prompt）</Label>
-        <pre className="text-[11px] bg-stone-900 text-stone-100 rounded-lg p-3 overflow-x-auto">
-          {`curl ${textUrl}`}
-        </pre>
+        <Label className="text-xs text-stone-500">Protocol 純文本（貼到 system prompt）</Label>
+        <pre className="text-[11px] bg-stone-900 text-amber-300 rounded-lg p-3 overflow-x-auto font-mono">{`curl ${protoUrl}`}</pre>
       </div>
       <div className="space-y-1.5">
         <Label className="text-xs text-stone-500">Python 範例</Label>
-        <pre className="text-[11px] bg-stone-900 text-stone-100 rounded-lg p-3 overflow-x-auto">
+        <pre className="text-[11px] bg-stone-900 text-stone-100 rounded-lg p-3 overflow-x-auto font-mono">
 {`import requests
-mem = requests.get("${textUrl}").text
-# 把 mem 貼到下次對話的 system prompt 開頭`}
+brain = requests.get("${protoUrl}").text
+# 把 brain 貼到下次對話的 system prompt 開頭
+# Brain 自帶 [D1] [C1] 等 ID，可直接引用："關於 D3, ..."`}
         </pre>
       </div>
       <p className="text-xs text-stone-500 leading-relaxed">
-        💡 在你的 agent 程式中，每次開新對話前先 fetch 這個端點，把回傳內容放到 system prompt 開頭即可。
-        純文本格式已經排版好，可以直接貼；JSON 格式則適合你自己在程式中重新排版。
+        💡 Brain Protocol 設計成給機器讀的：每條 item 有 ID（如 [D17]），下次對話可直接引用，
+        token 量比完整摘要少約 60-70%。
       </p>
     </div>
   )
 }
 
-function RefineCard({
+// ==================== Distill Card（含儀式動畫） ====================
+function DistillCard({
   conversation,
   setConversation,
-  onRefine,
-  refining,
-  hasPrevious,
+  onDistill,
+  distilling,
+  ritualSteps,
 }: {
   conversation: string
   setConversation: (v: string) => void
-  onRefine: () => void
-  refining: boolean
-  hasPrevious: boolean
+  onDistill: () => void
+  distilling: boolean
+  ritualSteps: DistillationRitualStep[] | null
 }) {
   const { toast } = useToast()
   const [tab, setTab] = useState<'paste' | 'url'>('paste')
@@ -641,27 +665,16 @@ function RefineCard({
     try {
       const res = await fetch(`/api/import-url?url=${encodeURIComponent(shareUrl.trim())}`)
       const data = await res.json()
-      if (!res.ok) {
-        throw new Error(data.error || 'import failed')
-      }
+      if (!res.ok) throw new Error(data.error || 'import failed')
       setConversation(data.conversationText)
-      setImportMeta({
-        source: data.source,
-        messageCount: data.messageCount,
-        title: data.title,
-      })
+      setImportMeta({ source: data.source, messageCount: data.messageCount, title: data.title })
       toast({
-        title: `已從 ${data.source === 'chatgpt' ? 'ChatGPT' : data.source === 'claude' ? 'Claude' : '分享連結'} 抓取對話`,
-        description: `${data.messageCount} 則訊息 · 已填入下方文本框，可檢視後再煉丹`,
+        title: `已從 ${data.source === 'chatgpt' ? 'ChatGPT' : data.source === 'claude' ? 'Claude' : '分享連結'} 抓取`,
+        description: `${data.messageCount} 則訊息`,
       })
-      // 切回貼上 tab 讓使用者看文本
       setTab('paste')
     } catch (err) {
-      toast({
-        title: '抓取失敗',
-        description: String(err),
-        variant: 'destructive',
-      })
+      toast({ title: '抓取失敗', description: String(err), variant: 'destructive' })
     } finally {
       setImporting(false)
     }
@@ -672,16 +685,11 @@ function RefineCard({
       <CardHeader className="pb-3">
         <CardTitle className="flex items-center gap-2 text-stone-800">
           <FlaskConical className="w-4 h-4 text-amber-600" />
-          煉丹爐
-          {hasPrevious && (
-            <Badge variant="outline" className="ml-auto text-xs font-normal border-emerald-200 text-emerald-700 bg-emerald-50">
-              <Sparkles className="w-3 h-3 mr-1" />
-              會融合上一顆藥丸
-            </Badge>
-          )}
+          蒸餾爐
+          {brainItemsHint(conversation)}
         </CardTitle>
         <CardDescription className="text-xs">
-          把這次對話餵進來，按「煉丹」就會幫你萃取成記憶藥丸。可直接貼文本，也可貼 ChatGPT / Claude 的分享連結。
+          把對話餵進來，按「蒸餾」就會萃取穩定知識加入 Brain（不是摘要，是 delta 運算）。
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-3">
@@ -689,18 +697,18 @@ function RefineCard({
           <TabsList className="grid w-full grid-cols-2 max-w-sm">
             <TabsTrigger value="paste" className="text-xs">
               <MessageSquare className="w-3 h-3 mr-1" />
-              貼對話文本
+              貼對話
             </TabsTrigger>
             <TabsTrigger value="url" className="text-xs">
               <LinkIcon className="w-3 h-3 mr-1" />
-              貼分享連結
+              分享連結
             </TabsTrigger>
           </TabsList>
 
           <TabsContent value="url" className="mt-3 space-y-2">
             <div className="flex gap-2">
               <Input
-                placeholder="https://chatgpt.com/share/...  或  https://claude.ai/share/..."
+                placeholder="https://chatgpt.com/share/... 或 https://claude.ai/share/..."
                 value={shareUrl}
                 onChange={(e) => setShareUrl(e.target.value)}
                 className="text-sm"
@@ -727,22 +735,11 @@ function RefineCard({
                 )}
               </Button>
             </div>
-            <div className="text-[11px] text-stone-500 leading-relaxed space-y-1.5">
-              <div className="flex items-start gap-1">
-                <ExternalLink className="w-3 h-3 mt-0.5 flex-shrink-0" />
-                <span>
-                  在 ChatGPT/Claude 對話右上角找到「Share」按鈕 → 建立公開分享連結 → 貼到這裡。
-                  抓回來的文本會填到「貼對話文本」tab 讓你檢視，確認後再按煉丹。
-                </span>
-              </div>
-              <div className="flex items-start gap-1 text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-2 py-1.5">
-                <span className="flex-shrink-0">⚠️</span>
-                <span>
-                  <b>已知限制：</b>ChatGPT 分享連結會被 Cloudflare 防護擋下（HTTP 403），
-                  建議改用「貼對話文本」tab。Claude 分享連結在支援地區可正常抓取。
-                  真正的「一鍵」需要 Chrome 擴充（會在你的瀏覽器中抓，繞過此限制）。
-                </span>
-              </div>
+            <div className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-2 py-1.5 flex items-start gap-1">
+              <span className="flex-shrink-0">⚠️</span>
+              <span>
+                <b>已知限制：</b>ChatGPT 分享連結會被 Cloudflare 擋下（HTTP 403），建議改用「貼對話」或安裝 Chrome 擴充。
+              </span>
             </div>
           </TabsContent>
 
@@ -750,42 +747,45 @@ function RefineCard({
             {importMeta && (
               <div className="text-[11px] bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-md px-2.5 py-1.5 flex items-center gap-1.5">
                 <Sparkles className="w-3 h-3" />
-                已從 {importMeta.source === 'chatgpt' ? 'ChatGPT' : importMeta.source === 'claude' ? 'Claude' : '分享連結'} 抓取
-                · {importMeta.messageCount} 則訊息
-                {importMeta.title && <span className="text-emerald-600">· {importMeta.title}</span>}
+                已從 {importMeta.source === 'chatgpt' ? 'ChatGPT' : 'Claude'} 抓取 · {importMeta.messageCount} 則訊息
               </div>
             )}
             <Textarea
-              placeholder={`貼上對話全文。例如：\n\nUser: 我想做一個 CRUD app...\nAssistant: 好啊，要什麼 stack？\nUser: Next.js + Prisma\nAssistant: 那我建議...\n\n不用担心太長 — 越完整，藥丸越有效。`}
-              rows={8}
+              placeholder={`貼上對話全文...\n\nUser: ...\nAssistant: ...\n\n越完整，蒸餾出的知識越穩定。`}
+              rows={6}
               value={conversation}
               onChange={(e) => {
                 setConversation(e.target.value)
-                if (importMeta) setImportMeta(null) // 使用者改了文本，重設 import 標記
+                if (importMeta) setImportMeta(null)
               }}
               className="resize-y text-sm leading-relaxed"
             />
           </TabsContent>
         </Tabs>
 
+        {/* 儀式動畫區 */}
+        {distilling && ritualSteps && (
+          <RitualAnimation steps={ritualSteps} />
+        )}
+
         <div className="flex items-center justify-between gap-3 flex-wrap">
-          <p className="text-xs text-stone-500">
-            {conversation.length > 0 ? `${conversation.length} 字元` : '提示：可以包含 user/assistant 標記，但不是必須'}
+          <p className="text-xs text-stone-500 font-mono">
+            {conversation.length > 0 ? `~${Math.ceil(conversation.length / 3)} tokens` : '提示：對話越完整，Brain 演化越精準'}
           </p>
           <Button
-            onClick={onRefine}
-            disabled={refining || !conversation.trim()}
+            onClick={onDistill}
+            disabled={distilling || !conversation.trim()}
             className="bg-amber-600 hover:bg-amber-700 text-white"
           >
-            {refining ? (
+            {distilling ? (
               <>
                 <GinkgoSpinning size={16} className="mr-1.5" />
-                煉丹中…
+                蒸餾中…
               </>
             ) : (
               <>
                 <Sparkles className="w-4 h-4 mr-1.5" />
-                煉丹
+                蒸餾
               </>
             )}
           </Button>
@@ -795,296 +795,438 @@ function RefineCard({
   )
 }
 
-function NoMemoryCard() {
+function brainItemsHint(_conversation: string) {
+  return null // 預留
+}
+
+// ==================== Ritual Animation ====================
+function RitualAnimation({ steps }: { steps: DistillationRitualStep[] }) {
+  const scrollRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (scrollRef.current) {
+      scrollRef.current.scrollTop = scrollRef.current.scrollHeight
+    }
+  }, [steps])
+
   return (
-    <Card className="border-dashed border-amber-200 bg-amber-50/30 relative overflow-hidden">
-      <GinkgoRain count={5} />
-      <CardContent className="py-10 text-center relative z-10">
-        <div className="text-amber-600 mb-3 flex justify-center">
-          <GinkgoLeaf size={40} />
-        </div>
-        <p className="text-stone-600 text-sm">這個專案還沒有藥丸</p>
-        <p className="text-xs text-stone-400 mt-1">把上面的對話貼進煉丹爐，按「煉丹」就會生出第一顆</p>
-      </CardContent>
-    </Card>
+    <div className="rounded-xl border border-amber-200 bg-gradient-to-b from-amber-50/50 to-stone-50 p-4">
+      <div className="flex items-center gap-2 mb-3 text-amber-700">
+        <GinkgoSpinning size={16} />
+        <span className="text-xs font-semibold tracking-wide">🌿 Distillating...</span>
+      </div>
+      <div ref={scrollRef} className="space-y-1.5 max-h-48 overflow-y-auto">
+        {steps.map((step, i) => (
+          <div key={i} className="flex items-start gap-2 text-xs animate-in fade-in slide-in-from-left-2 duration-300">
+            <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 mt-0.5 flex-shrink-0" />
+            <div className="flex-1 min-w-0">
+              <span className="text-stone-700 font-medium">{step.step}</span>
+              {step.tokens != null && (
+                <span className="text-stone-400 ml-1.5 font-mono">{step.tokens.toLocaleString()} tokens</span>
+              )}
+              {step.found != null && (
+                <span className="text-amber-600 ml-1.5 font-mono">({step.found})</span>
+              )}
+              {step.detail && (
+                <span className="text-stone-500 ml-1.5">— {step.detail}</span>
+              )}
+            </div>
+          </div>
+        ))}
+        {steps.length === 0 && (
+          <div className="text-xs text-stone-400 italic">準備中...</div>
+        )}
+      </div>
+    </div>
   )
 }
 
-function CurrentMemoryCard({ project, pill }: { project: Project; pill: PillFull }) {
-  const { toast } = useToast()
-  const summary = pill.summary
-
-  const handleCopy = () => {
-    const text = formatMemoryCard(project.name, summary, pill.title ?? undefined)
-    navigator.clipboard.writeText(text).then(
-      () => toast({ title: '記憶卡已複製 🌿', description: '貼到下次對話的第一則訊息即可' }),
-      () => toast({ title: '複製失敗', variant: 'destructive' }),
-    )
-  }
+// ==================== Today's Ginkgo Card ====================
+function TodayGinkgoCard({ distill }: { distill: DistillResponse }) {
+  const [expanded, setExpanded] = useState(false)
+  const todayGinkgo = distill.todayGinkgo || {}
+  const hasActivity = distill.delta.add.length > 0 || distill.delta.update.length > 0 || distill.delta.retire.length > 0
 
   return (
-    <Card className="border-amber-200 bg-white shadow-sm">
-      <CardHeader className="pb-3 flex flex-row items-start gap-3 space-y-0">
-        <div className="flex-1 min-w-0">
-          <CardTitle className="flex items-center gap-2 text-stone-800">
-            <GinkgoLeaf size={18} className="text-amber-600" />
-            當前記憶卡
-            <Badge variant="outline" className="ml-1 text-xs font-normal bg-amber-50 border-amber-200 text-amber-700">
-              current
-            </Badge>
-          </CardTitle>
-          <CardDescription className="text-xs mt-1 truncate">
-            {pill.title ?? '（無標題）'} · {new Date(pill.createdAt).toLocaleString('zh-TW')}
-          </CardDescription>
-        </div>
-        <Button onClick={handleCopy} size="sm" className="bg-emerald-600 hover:bg-emerald-700 text-white">
-          <Copy className="w-3.5 h-3.5 mr-1" />
-          複製記憶卡
-        </Button>
+    <Card className="border-amber-300 bg-gradient-to-br from-amber-50 to-orange-50/50 shadow-sm">
+      <CardHeader className="pb-2">
+        <CardTitle className="flex items-center gap-2 text-stone-800 text-base">
+          <GinkgoLeaf size={18} className="text-amber-600" />
+          今日銀杏
+          <Badge variant="outline" className="ml-auto text-xs font-mono bg-white">
+            v{distill.brainVersionBefore.toFixed(2)} → v{distill.brainVersionAfter.toFixed(2)}
+          </Badge>
+        </CardTitle>
+        <CardDescription className="text-xs">{distill.title}</CardDescription>
       </CardHeader>
-      <CardContent>
-        {isMemoryEmpty(summary) ? (
-          <div className="py-6 text-center text-sm text-stone-400">
-            這顆藥丸是空的 — LLM 沒有萃取出任何東西。可能對話內容太少？
-          </div>
+      <CardContent className="pt-2">
+        {!hasActivity ? (
+          <p className="text-sm text-stone-500 italic py-2">
+            這次對話沒有產生新的穩定知識（可能只是寒暄或測試）
+          </p>
         ) : (
-          <div className="space-y-4">
-            <MemorySection
-              icon="✅"
-              title="已定案的決策"
-              items={summary.decisions}
-              color="emerald"
-            />
-            <MemorySection
-              icon="⚠️"
-              title="仍待討論的開放問題"
-              items={summary.openQuestions}
-              color="amber"
-            />
-            <MemorySectionAction items={summary.actionItems} />
-            <MemorySection
-              icon="🎯"
-              title="背景錨點（不可遺忘）"
-              items={summary.contextAnchors}
-              color="stone"
-            />
-          </div>
+          <>
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+              {distill.delta.add.length > 0 && (
+                <StatBlock label="新增" count={distill.delta.add.length} emoji="✨" color="emerald" />
+              )}
+              {distill.delta.update.length > 0 && (
+                <StatBlock label="演化" count={distill.delta.update.length} emoji="🔄" color="amber" />
+              )}
+              {distill.delta.retire.length > 0 && (
+                <StatBlock label="退役" count={distill.delta.retire.length} emoji="⚰️" color="stone" />
+              )}
+              <StatBlock label="省下" count={distill.tokensSavedEstimate} suffix="tokens" emoji="💰" color="emerald" />
+            </div>
+
+            {/* 新增的條目按 type 分組 */}
+            {Object.keys(todayGinkgo).length > 0 && (
+              <div className="mt-3 flex flex-wrap gap-1.5">
+                {Object.entries(todayGinkgo).map(([type, count]) => (
+                  <Badge key={type} variant="outline" className="bg-white text-xs">
+                    {TYPE_EMOJI[type as KnowledgeType]} {TYPE_LABEL_ZH[type as KnowledgeType]} ×{count}
+                  </Badge>
+                ))}
+              </div>
+            )}
+
+            <button
+              onClick={() => setExpanded(!expanded)}
+              className="mt-3 flex items-center gap-1 text-xs text-amber-700 hover:text-amber-900"
+            >
+              {expanded ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
+              {expanded ? '收起詳情' : '展開詳情'}
+            </button>
+
+            {expanded && (
+              <div className="mt-2 space-y-2 text-xs">
+                {distill.delta.add.length > 0 && (
+                  <div>
+                    <p className="font-semibold text-emerald-700 mb-1">✨ 新增</p>
+                    {distill.delta.add.map((a, i) => (
+                      <div key={i} className="ml-3 mb-1 text-stone-700">
+                        <span className="font-mono text-amber-600">[{TYPE_EMOJI[a.type]}]</span>{' '}
+                        <span className="font-medium">{a.name || a.content.slice(0, 40)}</span>
+                        {a.rationale && <span className="text-stone-500"> — {a.rationale}</span>}
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {distill.delta.update.length > 0 && (
+                  <div>
+                    <p className="font-semibold text-amber-700 mb-1">🔄 演化</p>
+                    {distill.delta.update.map((u, i) => (
+                      <div key={i} className="ml-3 mb-1 text-stone-700">
+                        <span className="font-mono text-amber-600">[{u.id}]</span>{' '}
+                        {u.content || u.rationale}
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {distill.delta.retire.length > 0 && (
+                  <div>
+                    <p className="font-semibold text-stone-600 mb-1">⚰️ 退役</p>
+                    {distill.delta.retire.map((r, i) => (
+                      <div key={i} className="ml-3 mb-1 text-stone-600">
+                        <span className="font-mono">[{r.id}]</span> {r.reason}
+                        {r.supersededBy && <span className="text-emerald-600"> → [{r.supersededBy}]</span>}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+          </>
         )}
       </CardContent>
     </Card>
   )
 }
 
-function isMemoryEmpty(s: MemorySummary): boolean {
-  return (
-    s.decisions.length === 0 &&
-    s.openQuestions.length === 0 &&
-    s.actionItems.length === 0 &&
-    s.contextAnchors.length === 0
-  )
-}
-
-function MemorySection({
-  icon,
-  title,
-  items,
+function StatBlock({
+  label,
+  count,
+  suffix,
+  emoji,
   color,
 }: {
-  icon: string
-  title: string
-  items: string[]
+  label: string
+  count: number
+  suffix?: string
+  emoji: string
   color: 'emerald' | 'amber' | 'stone'
 }) {
-  if (items.length === 0) return null
   const colorMap = {
-    emerald: 'border-emerald-100 bg-emerald-50/40',
-    amber: 'border-amber-100 bg-amber-50/40',
-    stone: 'border-stone-200 bg-stone-50/60',
+    emerald: 'bg-emerald-50 border-emerald-200 text-emerald-800',
+    amber: 'bg-amber-50 border-amber-200 text-amber-800',
+    stone: 'bg-stone-100 border-stone-200 text-stone-700',
   }
   return (
-    <div className={`rounded-xl border ${colorMap[color]} p-3`}>
-      <div className="text-xs font-semibold text-stone-700 mb-2 flex items-center gap-1.5">
-        <span>{icon}</span>
-        {title}
-        <span className="text-stone-400 font-normal">· {items.length}</span>
+    <div className={`rounded-lg border p-2 ${colorMap[color]}`}>
+      <div className="text-lg font-bold">
+        {count.toLocaleString()}
+        {suffix && <span className="text-xs ml-1 font-normal">{suffix}</span>}
       </div>
-      <ul className="space-y-1.5">
-        {items.map((item, i) => (
-          <li key={i} className="text-sm text-stone-700 leading-relaxed pl-1">
-            <span className="text-stone-400 mr-1.5">{i + 1}.</span>
-            {item}
-          </li>
-        ))}
-      </ul>
+      <div className="text-xs">
+        {emoji} {label}
+      </div>
     </div>
   )
 }
 
-function MemorySectionAction({ items }: { items: ActionItem[] }) {
-  if (items.length === 0) return null
-  const statusIcon = (s: ActionItem['status']) => (s === 'done' ? '✓' : s === 'blocked' ? '✗' : '○')
-  const statusColor = (s: ActionItem['status']) =>
-    s === 'done'
-      ? 'text-emerald-600'
-      : s === 'blocked'
-        ? 'text-red-500'
-        : 'text-amber-600'
+// ==================== Brain Items Card（人類版 — 暖色） ====================
+function BrainItemsCard({ items }: { items: KnowledgeItem[] }) {
+  const active = items.filter((i) => i.status === 'active')
   return (
-    <div className="rounded-xl border border-sky-100 bg-sky-50/40 p-3">
-      <div className="text-xs font-semibold text-stone-700 mb-2 flex items-center gap-1.5">
-        <span>📋</span>
-        行動項
-        <span className="text-stone-400 font-normal">· {items.length}</span>
+    <Card className="border-amber-200 bg-white shadow-sm">
+      <CardHeader className="pb-2">
+        <CardTitle className="flex items-center gap-2 text-stone-800 text-base">
+          <Database className="w-4 h-4 text-amber-600" />
+          Brain 知識列表
+          <Badge variant="outline" className="ml-auto text-xs">{active.length} active</Badge>
+        </CardTitle>
+      </CardHeader>
+      <CardContent>
+        <ScrollArea className="max-h-96 pr-3">
+          <div className="space-y-1.5">
+            {active.map((item) => (
+              <div key={item.id} className="text-xs border-l-2 border-amber-300 pl-2 py-1">
+                <div className="flex items-baseline gap-1.5">
+                  <span className="font-mono text-amber-700 font-semibold">[{item.itemId}]</span>
+                  <span className="text-stone-400">{TYPE_EMOJI[item.type]}</span>
+                  <span className="text-stone-700 font-medium flex-1">{item.content}</span>
+                </div>
+                {item.rationale && (
+                  <div className="text-stone-500 ml-7 mt-0.5 italic">↳ {item.rationale}</div>
+                )}
+              </div>
+            ))}
+          </div>
+        </ScrollArea>
+      </CardContent>
+    </Card>
+  )
+}
+
+// ==================== Brain Protocol Panel（Agent 側 — 深色科技） ====================
+function BrainProtocolPanel({
+  projectName,
+  brainVersion,
+  items,
+  loading,
+}: {
+  projectName: string
+  brainVersion: number
+  items: KnowledgeItem[]
+  loading: boolean
+}) {
+  const { toast } = useToast()
+  const active = items.filter((i) => i.status === 'active')
+
+  const handleCopy = () => {
+    const text = formatBrainProtocol(projectName, brainVersion, items)
+    navigator.clipboard.writeText(text).then(
+      () => toast({ title: 'Brain Protocol 已複製 🌿', description: '貼到下次對話的 system prompt' }),
+      () => toast({ title: '複製失敗', variant: 'destructive' }),
+    )
+  }
+
+  return (
+    <div className="rounded-xl border border-stone-700 bg-stone-900 shadow-lg overflow-hidden">
+      {/* Terminal-like header */}
+      <div className="flex items-center gap-2 px-4 py-2.5 bg-stone-950 border-b border-stone-700">
+        <div className="flex gap-1.5">
+          <div className="w-3 h-3 rounded-full bg-red-500/80" />
+          <div className="w-3 h-3 rounded-full bg-amber-500/80" />
+          <div className="w-3 h-3 rounded-full bg-emerald-500/80" />
+        </div>
+        <div className="ml-2 flex items-center gap-1.5 text-xs text-stone-400 font-mono">
+          <Terminal className="w-3.5 h-3.5" />
+          brain.protocol
+        </div>
+        <Badge variant="outline" className="ml-auto text-xs font-mono bg-stone-800 border-stone-700 text-emerald-400">
+          v{brainVersion.toFixed(2)} · {active.length} items
+        </Badge>
+        <Button
+          onClick={handleCopy}
+          size="sm"
+          className="h-7 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-mono"
+        >
+          <Copy className="w-3 h-3 mr-1" />
+          Copy
+        </Button>
       </div>
-      <ul className="space-y-1.5">
-        {items.map((item, i) => (
-          <li key={i} className="text-sm text-stone-700 leading-relaxed flex items-start gap-2 pl-1">
-            <span className={`${statusColor(item.status)} font-bold mt-0.5 flex-shrink-0`}>
-              {statusIcon(item.status)}
-            </span>
-            <span className="flex-1">
-              {item.task}
-              {item.owner && <span className="text-stone-400 ml-1.5 text-xs">— {item.owner}</span>}
-            </span>
-          </li>
-        ))}
-      </ul>
+
+      {/* Protocol content */}
+      <div className="bg-stone-900 p-4 font-mono text-xs leading-relaxed max-h-[600px] overflow-y-auto">
+        {loading ? (
+          <div className="space-y-2">
+            <Skeleton className="h-3 w-3/4 bg-stone-700" />
+            <Skeleton className="h-3 w-1/2 bg-stone-700" />
+            <Skeleton className="h-3 w-2/3 bg-stone-700" />
+          </div>
+        ) : active.length === 0 ? (
+          <div className="text-stone-500 italic">
+            <span className="text-emerald-500">$</span> brain --status
+            <br />
+            <span className="text-amber-500">→ Brain is empty. Distill a conversation to begin.</span>
+          </div>
+        ) : (
+          <ProtocolTextView projectName={projectName} brainVersion={brainVersion} items={items} />
+        )}
+      </div>
+
+      {/* Status bar */}
+      <div className="px-4 py-1.5 bg-stone-950 border-t border-stone-700 flex items-center gap-3 text-[10px] text-stone-500 font-mono">
+        <span className="text-emerald-500">● ready</span>
+        <span>·</span>
+        <span>{active.length} active items</span>
+        <span>·</span>
+        <span>8-type taxonomy</span>
+        <span className="ml-auto text-stone-600">paste-ready for GPT / Claude / Agent</span>
+      </div>
     </div>
   )
 }
 
-function HistoryTimeline({
-  pills,
-  onRollback,
-  onDelete,
+function ProtocolTextView({
+  projectName,
+  brainVersion,
+  items,
 }: {
-  pills: PillFull[]
-  onRollback: (pillId: string) => void
-  onDelete: (pillId: string) => void
+  projectName: string
+  brainVersion: number
+  items: KnowledgeItem[]
 }) {
+  const active = items.filter((i) => i.status === 'active')
+  const grouped: Record<string, KnowledgeItem[]> = {}
+  for (const item of active) {
+    if (!grouped[item.type]) grouped[item.type] = []
+    grouped[item.type].push(item)
+  }
+
+  return (
+    <div>
+      <div className="text-stone-500"># Project Brain v{brainVersion.toFixed(2)} · {active.length} items · {projectName}</div>
+      <div className="text-stone-600"># distilled: {new Date().toISOString().slice(0, 10)}</div>
+      <div className="text-stone-600"># Use [ID] to reference any item (e.g., "Regarding D3, ...")</div>
+      <div className="text-stone-600">&nbsp;</div>
+
+      {KNOWLEDGE_TYPES.map((type) => {
+        const group = grouped[type]
+        if (!group || group.length === 0) return null
+        group.sort((a, b) => {
+          const na = parseInt(a.itemId.replace(/^[A-Z]+/, ''), 10) || 0
+          const nb = parseInt(b.itemId.replace(/^[A-Z]+/, ''), 10) || 0
+          return na - nb
+        })
+        return (
+          <div key={type}>
+            <div className="text-stone-500"># === {type} ({group.length}) ===</div>
+            {group.map((item) => (
+              <div key={item.id} className="mb-1">
+                <div>
+                  <span className="text-amber-400">[{item.itemId}]</span>{' '}
+                  <span className="text-emerald-400">{item.type}</span>{' '}
+                  <span className="text-stone-100">{item.content}</span>
+                </div>
+                {item.rationale && (
+                  <div className="text-stone-500 pl-6">rationale: {item.rationale}</div>
+                )}
+                {item.type === 'HYPOTHESIS' && item.confidence != null && (
+                  <div className="text-stone-500 pl-6">confidence: {item.confidence.toFixed(2)}</div>
+                )}
+              </div>
+            ))}
+            <div className="text-stone-600">&nbsp;</div>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+// ==================== Distillation Diary Panel ====================
+function DistillationDiaryPanel({ diary }: { diary: DiaryEntry[] }) {
   const [expanded, setExpanded] = useState<string | null>(null)
+
   return (
     <Card className="border-stone-200 bg-white">
       <CardHeader className="pb-3">
         <CardTitle className="flex items-center gap-2 text-stone-800 text-base">
           <History className="w-4 h-4 text-stone-500" />
-          藥丸歷史
-          <Badge variant="outline" className="text-xs font-normal">{pills.length}</Badge>
+          Distillation Diary
+          <Badge variant="outline" className="text-xs font-normal">{diary.length}</Badge>
+          <span className="ml-auto text-xs text-stone-500 font-normal">推理過程可檢視 · 不是黑盒</span>
         </CardTitle>
-        <CardDescription className="text-xs">
-          點任一顆藥丸可展開看詳情，可「回滾」到那顆作為當前記憶。
-        </CardDescription>
       </CardHeader>
       <CardContent>
-        <ScrollArea className="max-h-[600px] pr-3">
-          <div className="space-y-2">
-            {pills.map((pill, idx) => {
-              const isLast = idx === 0
-              const isExpanded = expanded === pill.id
-              return (
-                <div
-                  key={pill.id}
-                  className={`rounded-xl border transition-all ${
-                    pill.isCurrent
-                      ? 'border-amber-300 bg-amber-50/60'
-                      : 'border-stone-200 bg-white hover:border-stone-300'
-                  }`}
-                >
-                  <button
-                    className="w-full text-left p-3 flex items-center gap-3"
-                    onClick={() => setExpanded(isExpanded ? null : pill.id)}
-                  >
-                    <div className="flex-shrink-0">
-                      <GinkgoLeaf
-                        size={20}
-                        className={pill.isCurrent ? 'text-amber-600' : 'text-stone-300'}
-                      />
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <span className="text-sm font-medium text-stone-800 truncate">
-                          {pill.title ?? '(無標題)'}
-                        </span>
-                        {pill.isCurrent && (
-                          <Badge variant="outline" className="text-[10px] py-0 h-4 bg-amber-100 border-amber-300 text-amber-700">
-                            current
-                          </Badge>
-                        )}
-                        {isLast && !pill.isCurrent && (
-                          <Badge variant="outline" className="text-[10px] py-0 h-4 bg-stone-100 text-stone-500">
-                            latest
-                          </Badge>
-                        )}
-                      </div>
-                      <p className="text-xs text-stone-500 mt-0.5">
-                        {new Date(pill.createdAt).toLocaleString('zh-TW')}
-                      </p>
-                    </div>
-                    <span className="text-xs text-stone-400 flex-shrink-0">
-                      {isExpanded ? '收起' : '展開'}
-                    </span>
-                  </button>
-                  {isExpanded && (
-                    <div className="px-3 pb-3 pt-1 border-t border-stone-100 space-y-3">
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mt-3">
-                        <MemorySection icon="✅" title="決策" items={pill.summary.decisions} color="emerald" />
-                        <MemorySection icon="⚠️" title="開放問題" items={pill.summary.openQuestions} color="amber" />
-                        <MemorySection icon="🎯" title="背景錨點" items={pill.summary.contextAnchors} color="stone" />
-                        <MemorySectionAction items={pill.summary.actionItems} />
-                      </div>
-                      <details className="text-xs">
-                        <summary className="cursor-pointer text-stone-500 hover:text-stone-700">
-                          查看原始對話文本
-                        </summary>
-                        <pre className="mt-2 bg-stone-50 rounded-lg p-3 text-[11px] whitespace-pre-wrap max-h-60 overflow-y-auto text-stone-600">
-                          {pill.conversationText}
-                        </pre>
-                      </details>
-                      <div className="flex items-center gap-2 pt-2">
-                        {!pill.isCurrent && (
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            onClick={() => onRollback(pill.id)}
-                            className="border-amber-200 text-amber-700 hover:bg-amber-50"
-                          >
-                            <RotateCcw className="w-3 h-3 mr-1" />
-                            回滾為當前
-                          </Button>
-                        )}
-                        <AlertDialog>
-                          <AlertDialogTrigger asChild>
-                            <Button size="sm" variant="ghost" className="text-red-500 hover:text-red-600 hover:bg-red-50">
-                              <Trash2 className="w-3 h-3 mr-1" />
-                              刪除
-                            </Button>
-                          </AlertDialogTrigger>
-                          <AlertDialogContent>
-                            <AlertDialogHeader>
-                              <AlertDialogTitle>刪除這顆藥丸？</AlertDialogTitle>
-                              <AlertDialogDescription>
-                                刪除後無法復原。如果刪的是 current，會自動把前一顆設為 current。
-                              </AlertDialogDescription>
-                            </AlertDialogHeader>
-                            <AlertDialogFooter>
-                              <AlertDialogCancel>取消</AlertDialogCancel>
-                              <AlertDialogAction
-                                onClick={() => onDelete(pill.id)}
-                                className="bg-red-500 hover:bg-red-600"
-                              >
-                                刪除
-                              </AlertDialogAction>
-                            </AlertDialogFooter>
-                          </AlertDialogContent>
-                        </AlertDialog>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              )
-            })}
+        {diary.length === 0 ? (
+          <div className="py-8 text-center text-sm text-stone-400">
+            還沒有蒸餾紀錄 — 蒸餾第一次對話後這裡就會出現推理過程
           </div>
-        </ScrollArea>
+        ) : (
+          <ScrollArea className="max-h-[500px] pr-3">
+            <div className="space-y-2">
+              {diary.map((entry) => {
+                const isExpanded = expanded === entry.id
+                return (
+                  <div
+                    key={entry.id}
+                    className={`rounded-lg border transition-all ${
+                      isExpanded ? 'border-stone-300 bg-stone-50' : 'border-stone-200 bg-white hover:border-stone-300'
+                    }`}
+                  >
+                    <button
+                      className="w-full text-left p-3 flex items-center gap-3"
+                      onClick={() => setExpanded(isExpanded ? null : entry.id)}
+                    >
+                      <div className="font-mono text-xs text-stone-500 flex-shrink-0">
+                        v{entry.brainVersionBefore.toFixed(2)} → v{entry.brainVersionAfter.toFixed(2)}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="text-sm text-stone-700 truncate">
+                          {entry.pillTitle || '(無標題)'}
+                        </div>
+                        <div className="text-[11px] text-stone-500 mt-0.5">
+                          {new Date(entry.createdAt).toLocaleString('zh-TW')}
+                          {' · '}
+                          <span className="text-emerald-600">+{entry.deltaSummary.added || 0}</span>
+                          {' / '}
+                          <span className="text-amber-600">~{entry.deltaSummary.updated || 0}</span>
+                          {' / '}
+                          <span className="text-stone-500">-{entry.deltaSummary.retired || 0}</span>
+                          {' · '}
+                          read {entry.tokensRead.toLocaleString()} tok
+                          {' · '}
+                          <span className="text-emerald-700">saved ~{entry.tokensSavedEstimate.toLocaleString()} tok</span>
+                        </div>
+                      </div>
+                      {isExpanded ? <ChevronDown className="w-3 h-3 text-stone-400" /> : <ChevronRight className="w-3 h-3 text-stone-400" />}
+                    </button>
+                    {isExpanded && (
+                      <div className="px-3 pb-3 pt-1 border-t border-stone-100">
+                        <div className="rounded-md bg-stone-900 p-3 font-mono text-[11px] text-stone-300">
+                          <div className="text-emerald-400 mb-1.5">$ distill --verbose</div>
+                          {entry.ritualSteps.map((step, i) => (
+                            <div key={i} className="flex items-start gap-1.5">
+                              <CheckCircle2 className="w-3 h-3 text-emerald-500 mt-0.5 flex-shrink-0" />
+                              <span>
+                                {step.step}
+                                {step.tokens != null && <span className="text-amber-400 ml-1.5">{step.tokens.toLocaleString()} tok</span>}
+                                {step.found != null && <span className="text-emerald-400 ml-1.5">({step.found})</span>}
+                                {step.detail && <span className="text-stone-500 ml-1.5">— {step.detail}</span>}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+          </ScrollArea>
+        )}
       </CardContent>
     </Card>
   )

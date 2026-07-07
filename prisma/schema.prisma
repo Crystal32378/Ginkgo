@@ -1,4 +1,10 @@
 // 銀杏藥局 Ginkgo Pharmacy — 治療 AI 失憶症的小工具
+//
+// v2 架構：Distillation Engine
+// - Project = 一個專案
+// - KnowledgeItem = Brain 中的一條知識（8 種 type，可演化可退役）
+// - Pill = 對話 log（不再持有「記憶」，只是蒸餾原料）
+// - DistillationLog = 每次蒸餾的推理過程（ritual steps + delta summary）
 
 generator client {
   provider = "prisma-client-js"
@@ -16,40 +22,108 @@ model Project {
   name        String
   description String?
   emoji       String   @default("🌿")
+  brainVersion Int     @default(0)  // Brain 版本，每次蒸餾 +1
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
-  pills Pill[]
+  pills             Pill[]
+  knowledgeItems    KnowledgeItem[]
+  distillationLogs  DistillationLog[]
 }
 
-// 一顆銀杏藥丸 = 一次對話的結構化記憶快照
-// 透過 previousPillId 形成鏈狀結構，支援歷史回滾
+// Brain 中的一條知識。8 種 type：
+// DECISION / CONSTRAINT / PRINCIPLE / DEFINITION / FACT / QUESTION / RISK / HYPOTHESIS
+// 每條有 ID（如 D1, C1, DEF1），可演化（update）、可退役（retire）
+model KnowledgeItem {
+  id              String   @id @default(cuid())
+  projectId       String
+  project         Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  // 顯示用 ID，如 "D1", "C1", "DEF1"。每個 project 內 + type 內獨立編號
+  itemId          String
+
+  type            String   // DECISION | CONSTRAINT | PRINCIPLE | DEFINITION | FACT | QUESTION | RISK | HYPOTHESIS
+
+  // 簡短名稱（kebab-case），例如 "memory-structure" "stack-choice"
+  name            String
+
+  // 主要內容 — 一句話陳述
+  content         String
+
+  // 為什麼 — context、justification
+  rationale       String?
+
+  // 信心程度 0-1，主要給 HYPOTHESIS 用，但所有 type 都可填
+  confidence      Float?
+
+  // active | retired
+  status          String   @default("active")
+
+  // 來源：哪次蒸餾（pill）產生此 item
+  sourcePillId    String?
+  sourcePill      Pill?    @relation(fields: [sourcePillId], references: [id], onDelete: SetNull)
+
+  // 退役時指向：取代此 item 的 item id
+  supersededById  String?
+
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@unique([projectId, itemId])
+  @@index([projectId, status])
+  @@index([projectId, type])
+}
+
+// 一顆銀杏藥丸 = 一次對話的 log
+// 不再持有「記憶摘要」— 那個角色交給 KnowledgeItem
+// Pill 現在只是「這次對話貢獻了什麼」的原料紀錄
 model Pill {
   id              String   @id @default(cuid())
   projectId       String
   project         Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  previousPillId  String?  // 上一顆藥丸的 id，形成鏈
 
   // 使用者貼進來的原始對話文本
   conversationText String
 
-  // LLM 萃取出的 4 段式結構化記憶（JSON string）
-  // {
-  //   decisions: string[],
-  //   openQuestions: string[],
-  //   actionItems: { task, owner?, status }[],
-  //   contextAnchors: string[]
-  // }
-  summaryJson     String
-
-  // 是否為當前活躍的藥丸（每個 project 只會有一個 isCurrent=true）
-  isCurrent       Boolean  @default(false)
-
-  // LLM 回覆的純文本摘要（一句話描述這次對話發生了什麼，用於歷史列表顯示）
+  // 標題（一句話描述這次對話發生了什麼）
   title           String?
+
+  // token 數（用於 Diary 統計）
+  tokenEstimate   Int      @default(0)
+
+  createdAt       DateTime @default(now())
+
+  // 反向關聯
+  distillationLogs DistillationLog[]
+  knowledgeItems   KnowledgeItem[]
+
+  @@index([projectId])
+}
+
+// 一次蒸餾的推理過程紀錄
+// 對應用戶提的「Distillation Diary」— 可檢視的推理紀錄
+model DistillationLog {
+  id              String   @id @default(cuid())
+  projectId       String
+  project         Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  pillId          String
+  pill            Pill     @relation(fields: [pillId], references: [id], onDelete: Cascade)
+
+  // Brain 版本變化
+  brainVersionBefore Int
+  brainVersionAfter  Int
+
+  // ritual 步驟（JSON array of {step, detail?, tokens?, status}）
+  ritualSteps     String
+
+  // delta 摘要（JSON: {added: N, updated: N, retired: N, byType: {...}}）
+  deltaSummary    String
+
+  // 統計
+  tokensRead      Int      @default(0)  // 這次對話的 token 量
+  tokensSavedEstimate Int  @default(0)  // 估算省下多少 token（對話 token - brain token）
 
   createdAt       DateTime @default(now())
 
   @@index([projectId])
-  @@index([isCurrent])
 }
