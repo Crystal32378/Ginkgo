@@ -1,0 +1,55 @@
+// 銀杏藥局 Ginkgo Pharmacy — 治療 AI 失憶症的小工具
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// 一個專案 = 一條記憶鏈
+// 不同專案的記憶互相隔離，避免汙染（這是 ChatGPT Memory 最大的缺陷）
+model Project {
+  id          String   @id @default(cuid())
+  name        String
+  description String?
+  emoji       String   @default("🌿")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  pills Pill[]
+}
+
+// 一顆銀杏藥丸 = 一次對話的結構化記憶快照
+// 透過 previousPillId 形成鏈狀結構，支援歷史回滾
+model Pill {
+  id              String   @id @default(cuid())
+  projectId       String
+  project         Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  previousPillId  String?  // 上一顆藥丸的 id，形成鏈
+
+  // 使用者貼進來的原始對話文本
+  conversationText String
+
+  // LLM 萃取出的 4 段式結構化記憶（JSON string）
+  // {
+  //   decisions: string[],
+  //   openQuestions: string[],
+  //   actionItems: { task, owner?, status }[],
+  //   contextAnchors: string[]
+  // }
+  summaryJson     String
+
+  // 是否為當前活躍的藥丸（每個 project 只會有一個 isCurrent=true）
+  isCurrent       Boolean  @default(false)
+
+  // LLM 回覆的純文本摘要（一句話描述這次對話發生了什麼，用於歷史列表顯示）
+  title           String?
+
+  createdAt       DateTime @default(now())
+
+  @@index([projectId])
+  @@index([isCurrent])
+}
