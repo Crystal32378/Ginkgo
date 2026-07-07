@@ -32,6 +32,7 @@ yarn-error.log*
 
 # env files (can opt-in for committing if needed)
 .env*
+!.env.example
 
 # vercel
 .vercel
@@ -52,3 +53,23 @@ prompt
 server.log
 # Skills directory
 /skills/
+
+# === Ginkgo specific ===
+
+# SQLite database (使用者資料 — 不該進 repo)
+/db/*.db
+/db/*.db-journal
+
+# zscripts internal
+/.zscripts/
+# Download 資料夾是給 user 拿擴充用的，但這個 repo 不該重複存擴充（擴充會在另一個 repo 或同 repo 的子目錄）
+# 暫時保留 /download/ — 因為裡面有 Chrome 擴充 source
+
+# Mac
+.AppleDouble
+.LSOverride
+
+# IDE
+.idea/
+.vscode/
+*.swp
