@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
 import { distillConversation } from '@/lib/distill'
 import { nextItemId, type KnowledgeItem, type KnowledgeType } from '@/lib/brain'
+import { type ProfileItem, type ProfileType } from '@/lib/profile'
 
 export const dynamic = 'force-dynamic'
 export const maxDuration = 60
@@ -56,6 +57,24 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       updatedAt: i.updatedAt.toISOString(),
     }))
 
+    // 1b. 取得 User Profile 現況（跨專案，全局）
+    const existingProfileItems = await db.profileItem.findMany({
+      orderBy: { createdAt: 'asc' },
+    })
+    const profileItems: ProfileItem[] = existingProfileItems.map((i) => ({
+      id: i.id,
+      itemId: i.itemId,
+      type: i.type as ProfileType,
+      name: i.name,
+      content: i.content,
+      rationale: i.rationale,
+      status: i.status as 'active' | 'retired',
+      source: i.source,
+      sourceSuggestionId: i.sourceSuggestionId,
+      createdAt: i.createdAt.toISOString(),
+      updatedAt: i.updatedAt.toISOString(),
+    }))
+
     const brainVersionBefore = project.brainVersion
 
     // 2. 建立 Pill（對話 log）— 先建，distill 完成後再更新 title
@@ -67,9 +86,9 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       },
     })
 
-    // 3. 呼叫 LLM 蒸餾
-    const result = await distillConversation(conversationText, brainItems, brainVersionBefore)
-    const { delta, title, tokensRead, backend } = result
+    // 3. 呼叫 LLM 蒸餾（同時蒸餾 Brain + Profile）
+    const result = await distillConversation(conversationText, brainItems, brainVersionBefore, profileItems)
+    const { delta, profileDelta, title, tokensRead, backend } = result
 
     // 4. 套用 delta 到 Brain
     const itemsAfter = [...brainItems]
@@ -174,6 +193,68 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       retired: delta.delta.retire.length,
       byType: todayGinkgo,
     })
+
+    // 8a. 把 profileDelta 存成 PendingProfileSuggestion（不直接套用）
+    const profileSuggestionsCreated: Array<{ id: string; type: ProfileType; operation: string }> = []
+    for (const a of profileDelta.add) {
+      const s = await db.pendingProfileSuggestion.create({
+        data: {
+          operation: 'add',
+          type: a.type,
+          name: a.name || a.content.slice(0, 30),
+          content: a.content,
+          rationale: a.rationale,
+          sourcePillId: pill.id,
+          sourceProjectId: projectId,
+          sourceProjectName: project.name,
+          status: 'pending',
+        },
+      })
+      profileSuggestionsCreated.push({ id: s.id, type: a.type, operation: 'add' })
+    }
+    for (const u of profileDelta.update) {
+      const s = await db.pendingProfileSuggestion.create({
+        data: {
+          operation: 'update',
+          type: '', // update 不需要 type，existingItemId 指向的 item 自帶 type
+          existingItemId: u.id,
+          content: u.content,
+          rationale: u.rationale,
+          sourcePillId: pill.id,
+          sourceProjectId: projectId,
+          sourceProjectName: project.name,
+          status: 'pending',
+        },
+      })
+      profileSuggestionsCreated.push({ id: s.id, type: '' as ProfileType, operation: 'update' })
+    }
+    for (const r of profileDelta.retire) {
+      const s = await db.pendingProfileSuggestion.create({
+        data: {
+          operation: 'retire',
+          type: '',
+          existingItemId: r.id,
+          rationale: r.reason,
+          sourcePillId: pill.id,
+          sourceProjectId: projectId,
+          sourceProjectName: project.name,
+          status: 'pending',
+        },
+      })
+      profileSuggestionsCreated.push({ id: s.id, type: '' as ProfileType, operation: 'retire' })
+    }
+
+    const profileDeltaSummary = JSON.stringify({
+      suggested: profileSuggestionsCreated.length,
+      add: profileDelta.add.length,
+      update: profileDelta.update.length,
+      retire: profileDelta.retire.length,
+      byType: profileSuggestionsCreated.reduce((acc, s) => {
+        if (s.type) acc[s.type] = (acc[s.type] || 0) + 1
+        return acc
+      }, {} as Record<string, number>),
+    })
+
     await db.distillationLog.create({
       data: {
         projectId,
@@ -182,6 +263,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
         brainVersionAfter,
         ritualSteps,
         deltaSummary,
+        profileDeltaSummary,
         tokensRead,
         tokensSavedEstimate,
       },
@@ -194,6 +276,12 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       brainVersionAfter,
       ritual: delta.ritual,
       delta: delta.delta,
+      profileDelta: {
+        add: profileDelta.add,
+        update: profileDelta.update,
+        retire: profileDelta.retire,
+        pendingSuggestions: profileSuggestionsCreated.length,
+      },
       todayGinkgo,
       tokensRead,
       tokensSavedEstimate,

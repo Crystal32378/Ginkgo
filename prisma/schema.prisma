@@ -119,6 +119,9 @@ model DistillationLog {
   // delta 摘要（JSON: {added: N, updated: N, retired: N, byType: {...}}）
   deltaSummary    String
 
+  // profile delta 摘要（JSON: {suggested: N, byType: {...}}）
+  profileDeltaSummary String?
+
   // 統計
   tokensRead      Int      @default(0)  // 這次對話的 token 量
   tokensSavedEstimate Int  @default(0)  // 估算省下多少 token（對話 token - brain token）
@@ -126,4 +129,87 @@ model DistillationLog {
   createdAt       DateTime @default(now())
 
   @@index([projectId])
+}
+
+// ============================================================
+// User Profile（v0.2 — Task B）
+// ============================================================
+//
+// 設計理念（user 指定）：
+// 不是記錄「你是誰」，而是累積「如何與你合作」
+// 跨專案、長期生效。錯了比 Project Brain 更危險，所以：
+//   - 從對話蒸餾出的 Profile 變更 → 進 PendingProfileSuggestion 等人類 review
+//   - 手動新增 → 直接 active
+//
+// 6 種 type：
+//   REASONING_PATTERN  — 思考模式（AI 主動展現）
+//   COLLABORATION_PREF — 協作偏好（AI 遵守限制）
+//   COMMUNICATION_STYLE — 溝通風格（AI 匹配輸出）
+//   WORKING_RHYTHM     — 工作節奏（AI 配合時機）
+//   DOMAIN_CONTEXT     — 領域背景（AI 預設理解）
+//   PET_PEEVE          — 地雷（AI 主動避開）
+
+model ProfileItem {
+  id              String   @id @default(cuid())
+
+  // 顯示用 ID，如 "RP1", "CP1", "CS1"。全局唯一編號
+  itemId          String   @unique
+
+  type            String   // REASONING_PATTERN | COLLABORATION_PREF | COMMUNICATION_STYLE | WORKING_RHYTHM | DOMAIN_CONTEXT | PET_PEEVE
+
+  // 簡短名稱（kebab-case），例如 "ask-why-first" "no-repetition"
+  name            String
+
+  // 主要內容 — 一句話陳述
+  content         String
+
+  // 為什麼 — context、justification
+  rationale       String?
+
+  // active | retired
+  status          String   @default("active")
+
+  // 來源：manual | suggestion
+  source          String   @default("manual")
+
+  // 如果是從 suggestion 核准的，記錄原 suggestion id
+  sourceSuggestionId String?
+
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
+// 從對話蒸餾出、等待人類 review 的 Profile 變更建議
+// 不直接套用到 ProfileItem — 必須人工 approve 才生效
+model PendingProfileSuggestion {
+  id              String   @id @default(cuid())
+
+  // add | update | retire
+  operation       String
+
+  type            String   // 6 種 type 之一
+
+  name            String?
+  content         String?
+  rationale       String?
+
+  // 如果是 update/retire，指向既有的 ProfileItem itemId
+  existingItemId  String?
+
+  // 來源：哪次蒸餾發現這個建議
+  sourcePillId    String?
+  sourceProjectId String?
+  sourceProjectName String?  // 方便 UI 顯示，denormalized
+
+  // pending | approved | rejected
+  status          String   @default("pending")
+
+  // 核准/拒絕時的註記
+  reviewNote      String?
+
+  reviewedAt      DateTime?
+  createdAt       DateTime @default(now())
+
+  @@index([status])
+  @@index([type])
 }
