@@ -45,6 +45,13 @@ import {
   formatBrainProtocol,
 } from '@/lib/brain'
 import {
+  type ProfileItem,
+  type ProfileType,
+  PROFILE_TYPES,
+  PROFILE_TYPE_EMOJI,
+  PROFILE_TYPE_LABEL_ZH,
+} from '@/lib/profile'
+import {
   Plus,
   ArrowLeft,
   Copy,
@@ -63,6 +70,10 @@ import {
   Database,
   ChevronDown,
   ChevronRight,
+  User,
+  Check,
+  X,
+  AlertCircle,
 } from 'lucide-react'
 
 // ==================== Types ====================
@@ -445,6 +456,7 @@ function ProjectDetailView({ project, onBack }: { project: Project | null; onBac
   const [ritualSteps, setRitualSteps] = useState<DistillationRitualStep[] | null>(null)
   const [lastDistill, setLastDistill] = useState<DistillResponse | null>(null)
   const [showApiHelp, setShowApiHelp] = useState(false)
+  const [profileRefreshKey, setProfileRefreshKey] = useState(0)  // distill 後觸發 profile card 重新 fetch
 
   const fetchAll = useCallback(async () => {
     if (!project) return
@@ -508,6 +520,8 @@ function ProjectDetailView({ project, onBack }: { project: Project | null; onBac
 
       // 重新撈 Brain + Diary
       await fetchAll()
+      // 觸發 Profile card 重新 fetch（可能會有新的 pending suggestion）
+      setProfileRefreshKey((k) => k + 1)
     } catch (err) {
       toast({ title: '蒸餾失敗', description: String(err), variant: 'destructive' })
     } finally {
@@ -565,6 +579,9 @@ function ProjectDetailView({ project, onBack }: { project: Project | null; onBac
           </DialogContent>
         </Dialog>
       </div>
+
+      {/* User Profile — 跨專案合作記憶 */}
+      <UserProfileCard key={profileRefreshKey} onProfileChanged={fetchAll} />
 
       {/* 從資料匯出匯入 — 獨立區塊 */}
       <ImportExportCard projectId={project.id} onDistilled={fetchAll} />
@@ -1145,6 +1162,346 @@ function ProtocolTextView({
         )
       })}
     </div>
+  )
+}
+
+// ==================== User Profile Card（跨專案合作記憶） ====================
+interface PendingSuggestion {
+  id: string
+  operation: 'add' | 'update' | 'retire'
+  type: string
+  name: string | null
+  content: string | null
+  rationale: string | null
+  existingItemId: string | null
+  sourceProjectId: string | null
+  sourceProjectName: string | null
+  createdAt: string
+}
+
+function UserProfileCard({ onProfileChanged }: { onProfileChanged: () => Promise<void> }) {
+  const { toast } = useToast()
+  const [items, setItems] = useState<ProfileItem[]>([])
+  const [pending, setPending] = useState<PendingSuggestion[]>([])
+  const [loading, setLoading] = useState(true)
+  const [showAddForm, setShowAddForm] = useState(false)
+  const [newItem, setNewItem] = useState<{ type: ProfileType; name: string; content: string; rationale: string }>({
+    type: 'COLLABORATION_PREF',
+    name: '',
+    content: '',
+    rationale: '',
+  })
+  const [submitting, setSubmitting] = useState(false)
+  const [reviewingId, setReviewingId] = useState<string | null>(null)
+
+  const fetchProfile = useCallback(async () => {
+    setLoading(true)
+    try {
+      const res = await fetch('/api/profile?include=suggestions')
+      const data = await res.json()
+      setItems(data.items || [])
+      setPending(data.pendingSuggestions || [])
+    } catch (err) {
+      toast({ title: '載入 Profile 失敗', description: String(err), variant: 'destructive' })
+    } finally {
+      setLoading(false)
+    }
+  }, [toast])
+
+  useEffect(() => {
+    fetchProfile()
+  }, [fetchProfile])
+
+  const handleAdd = async () => {
+    if (!newItem.content.trim()) {
+      toast({ title: '請填 content', variant: 'destructive' })
+      return
+    }
+    setSubmitting(true)
+    try {
+      const res = await fetch('/api/profile', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(newItem),
+      })
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}))
+        throw new Error(err.error || 'add failed')
+      }
+      toast({ title: 'Profile item 已新增 ✓' })
+      setNewItem({ type: 'COLLABORATION_PREF', name: '', content: '', rationale: '' })
+      setShowAddForm(false)
+      await fetchProfile()
+      await onProfileChanged()
+    } catch (err) {
+      toast({ title: '新增失敗', description: String(err), variant: 'destructive' })
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  const handleApprove = async (id: string) => {
+    setReviewingId(id)
+    try {
+      const res = await fetch(`/api/profile/suggestions/${id}/approve`, {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({}),
+      })
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}))
+        throw new Error(err.error || 'approve failed')
+      }
+      toast({ title: '已核准 — Profile 已更新' })
+      await fetchProfile()
+      await onProfileChanged()
+    } catch (err) {
+      toast({ title: '核准失敗', description: String(err), variant: 'destructive' })
+    } finally {
+      setReviewingId(null)
+    }
+  }
+
+  const handleReject = async (id: string) => {
+    setReviewingId(id)
+    try {
+      const res = await fetch(`/api/profile/suggestions/${id}/reject`, {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({}),
+      })
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}))
+        throw new Error(err.error || 'reject failed')
+      }
+      toast({ title: '已拒絕' })
+      await fetchProfile()
+    } catch (err) {
+      toast({ title: '拒絕失敗', description: String(err), variant: 'destructive' })
+    } finally {
+      setReviewingId(null)
+    }
+  }
+
+  const activeItems = items.filter((i) => i.status === 'active')
+
+  return (
+    <Card className="border-emerald-200 bg-gradient-to-br from-emerald-50/40 to-amber-50/30 shadow-sm">
+      <CardHeader className="pb-3">
+        <CardTitle className="flex items-center gap-2 text-stone-800 text-base">
+          <User className="w-4 h-4 text-emerald-600" />
+          我的 Profile
+          <Badge variant="outline" className="text-xs font-normal bg-white">
+            {activeItems.length} active
+          </Badge>
+          {pending.length > 0 && (
+            <Badge variant="outline" className="text-xs font-normal bg-amber-100 border-amber-300 text-amber-800">
+              <AlertCircle className="w-3 h-3 mr-1" />
+              {pending.length} 待審核
+            </Badge>
+          )}
+          <span className="ml-auto text-xs text-stone-500 font-normal hidden sm:inline">
+            跨專案 · 記得「如何與你合作」
+          </span>
+        </CardTitle>
+        <CardDescription className="text-xs">
+          不是記錄「你是誰」，而是累積「如何與你合作」。蒸餾時自動觀察你的協作模式，
+          但<span className="font-medium text-amber-700">不會自動套用</span> — 你必須 review 才會生效。
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        {loading ? (
+          <div className="space-y-2">
+            <Skeleton className="h-8 w-full" />
+            <Skeleton className="h-8 w-full" />
+          </div>
+        ) : (
+          <>
+            {/* Pending suggestions — 顯示在最上面，最顯眼 */}
+            {pending.length > 0 && (
+              <div className="space-y-2">
+                <div className="text-xs font-semibold text-amber-800 flex items-center gap-1.5">
+                  <AlertCircle className="w-3.5 h-3.5" />
+                  {pending.length} 個 Profile 建議待你審核
+                </div>
+                <div className="space-y-2">
+                  {pending.map((s) => (
+                    <div key={s.id} className="rounded-lg border border-amber-300 bg-amber-50/60 p-3">
+                      <div className="flex items-start gap-2">
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2 flex-wrap text-xs">
+                            <Badge variant="outline" className="bg-white text-[10px]">
+                              {s.operation === 'add' ? `+ add ${PROFILE_TYPE_LABEL_ZH[s.type as ProfileType] || s.type}` : s.operation === 'update' ? `~ update ${s.existingItemId}` : `- retire ${s.existingItemId}`}
+                            </Badge>
+                            {s.sourceProjectName && (
+                              <span className="text-stone-500">from: {s.sourceProjectName}</span>
+                            )}
+                          </div>
+                          <div className="mt-1.5 text-sm text-stone-800">
+                            {s.content || s.rationale || s.name}
+                          </div>
+                          {s.rationale && s.content && (
+                            <div className="mt-1 text-xs text-stone-500 italic">↳ {s.rationale}</div>
+                          )}
+                          {s.operation === 'add' && s.name && (
+                            <div className="mt-0.5 text-[10px] text-stone-400 font-mono">name: {s.name}</div>
+                          )}
+                        </div>
+                        <div className="flex flex-col gap-1 flex-shrink-0">
+                          <Button
+                            size="sm"
+                            onClick={() => handleApprove(s.id)}
+                            disabled={reviewingId === s.id}
+                            className="h-7 px-2 bg-emerald-600 hover:bg-emerald-700 text-white text-xs"
+                          >
+                            <Check className="w-3 h-3 mr-1" />
+                            核准
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            onClick={() => handleReject(s.id)}
+                            disabled={reviewingId === s.id}
+                            className="h-7 px-2 text-stone-500 hover:text-red-600 hover:bg-red-50 text-xs"
+                          >
+                            <X className="w-3 h-3 mr-1" />
+                            拒絕
+                          </Button>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Active profile items 分組顯示 */}
+            {activeItems.length > 0 ? (
+              <div className="space-y-2">
+                {PROFILE_TYPES.map((type) => {
+                  const group = activeItems.filter((i) => i.type === type)
+                  if (group.length === 0) return null
+                  return (
+                    <div key={type}>
+                      <div className="text-xs font-semibold text-stone-600 mb-1 flex items-center gap-1">
+                        <span>{PROFILE_TYPE_EMOJI[type]}</span>
+                        {PROFILE_TYPE_LABEL_ZH[type]}
+                        <span className="text-stone-400 font-normal">· {group.length}</span>
+                      </div>
+                      <div className="space-y-1">
+                        {group.map((item) => (
+                          <div key={item.id} className="text-xs border-l-2 border-emerald-300 pl-2 py-1">
+                            <div className="flex items-baseline gap-1.5">
+                              <span className="font-mono text-emerald-700 font-semibold">[{item.itemId}]</span>
+                              <span className="text-stone-700 flex-1">{item.content}</span>
+                              {item.source === 'manual' && (
+                                <span className="text-[10px] text-stone-400">手動</span>
+                              )}
+                              {item.source === 'suggestion' && (
+                                <span className="text-[10px] text-emerald-600">已審核</span>
+                              )}
+                            </div>
+                            {item.rationale && (
+                              <div className="text-stone-500 ml-7 mt-0.5 italic">↳ {item.rationale}</div>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+            ) : (
+              <div className="text-center py-6 text-xs text-stone-400">
+                <User className="w-8 h-8 mx-auto mb-2 opacity-40" />
+                Profile 是空的 — 蒸餾對話時會自動觀察你的協作模式，
+                <br />
+                或手動新增你已經知道的合作偏好
+              </div>
+            )}
+
+            {/* 手動新增表單 */}
+            {showAddForm ? (
+              <div className="rounded-lg border border-emerald-200 bg-white p-3 space-y-2">
+                <div className="text-xs font-semibold text-stone-700">手動新增 Profile item</div>
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <Label className="text-[10px] text-stone-500">Type</Label>
+                    <select
+                      className="w-full text-xs border border-stone-200 rounded-md px-2 py-1 bg-white"
+                      value={newItem.type}
+                      onChange={(e) => setNewItem({ ...newItem, type: e.target.value as ProfileType })}
+                    >
+                      {PROFILE_TYPES.map((t) => (
+                        <option key={t} value={t}>
+                          {PROFILE_TYPE_EMOJI[t]} {PROFILE_TYPE_LABEL_ZH[t]}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <Label className="text-[10px] text-stone-500">Name (kebab-case)</Label>
+                    <Input
+                      className="text-xs h-7"
+                      placeholder="e.g. no-repetition"
+                      value={newItem.name}
+                      onChange={(e) => setNewItem({ ...newItem, name: e.target.value })}
+                    />
+                  </div>
+                </div>
+                <div>
+                  <Label className="text-[10px] text-stone-500">Content *</Label>
+                  <Textarea
+                    className="text-xs"
+                    rows={2}
+                    placeholder="一句話陳述這個合作偏好，e.g. 不喜歡 AI 重複已經說過的內容"
+                    value={newItem.content}
+                    onChange={(e) => setNewItem({ ...newItem, content: e.target.value })}
+                  />
+                </div>
+                <div>
+                  <Label className="text-[10px] text-stone-500">Rationale (可選)</Label>
+                  <Input
+                    className="text-xs h-7"
+                    placeholder="為什麼？e.g. 浪費 token 又稀釋重點"
+                    value={newItem.rationale}
+                    onChange={(e) => setNewItem({ ...newItem, rationale: e.target.value })}
+                  />
+                </div>
+                <div className="flex gap-2">
+                  <Button
+                    size="sm"
+                    onClick={handleAdd}
+                    disabled={submitting}
+                    className="h-7 bg-emerald-600 hover:bg-emerald-700 text-white text-xs"
+                  >
+                    {submitting ? '新增中…' : '新增'}
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => setShowAddForm(false)}
+                    className="h-7 text-xs"
+                  >
+                    取消
+                  </Button>
+                </div>
+              </div>
+            ) : (
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => setShowAddForm(true)}
+                className="border-emerald-200 text-emerald-700 hover:bg-emerald-50 text-xs h-7"
+              >
+                <Plus className="w-3 h-3 mr-1" />
+                手動新增
+              </Button>
+            )}
+          </>
+        )}
+      </CardContent>
+    </Card>
   )
 }
 
