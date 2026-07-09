@@ -153,7 +153,7 @@ function Header() {
           <GinkgoLeaf size={28} className="text-amber-600" />
           <div>
             <h1 className="text-lg font-bold tracking-tight text-stone-800">Ginkgo</h1>
-            <p className="text-[10px] text-stone-500 -mt-0.5">Distillation Engine · 治療 AI 失憶症</p>
+            <p className="text-[10px] text-stone-500 -mt-0.5">Consistent, evolving memory for AI</p>
           </div>
         </div>
         <div className="ml-auto hidden sm:flex items-center gap-1.5 text-xs text-stone-500">
@@ -177,7 +177,7 @@ function Footer() {
       <div className="container mx-auto max-w-7xl px-4 py-4 text-xs text-stone-500 flex flex-wrap items-center justify-between gap-2">
         <span className="flex items-center gap-1.5">
           <GinkgoLeaf size={12} className="text-amber-600" />
-          Ginkgo — 蒸餾引擎，把對話變成可演化的專案知識
+          Ginkgo — 一致且持續成長的 AI 記憶，把對話提煉成可延續的理解
         </span>
         <span className="text-stone-400 font-mono">v2 · local-first · SQLite</span>
       </div>
@@ -252,15 +252,14 @@ function ProjectListView({ onOpen }: { onOpen: (p: Project) => void }) {
           <div className="flex items-start gap-4 flex-wrap">
             <div className="flex-1 min-w-[280px]">
               <h2 className="text-2xl md:text-3xl font-bold text-stone-800 mb-2 flex items-center gap-2 flex-wrap">
-                Distillation Engine
+                Consistent, Evolving Memory for AI
                 <span className="text-amber-600">
                   <GinkgoLeaf size={28} className="inline" />
                 </span>
               </h2>
               <p className="text-stone-600 text-sm leading-relaxed">
-                不是摘要引擎，是<span className="font-semibold text-amber-700">蒸餾引擎</span>。
-                把對話持續提煉成可演化的 Project Brain — 8 種知識類型、delta 運算、可檢視的推理過程。
-                下次對話直接讀 Brain，不再重新解釋背景。
+                AI 不應該在每一次新對話都重新開始。Ginkgo 讓每一次對話，都建立在前一次的理解之上。
+                不是保存聊天紀錄，而是將專案、研究與規劃中的討論，持續提煉成一致且會演化的記憶。
               </p>
               <div className="mt-4 grid grid-cols-4 md:grid-cols-8 gap-1.5 text-xs">
                 {KNOWLEDGE_TYPES.map((t) => (
